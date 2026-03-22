@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electricity Demand Forecasting</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <div class="dashboard">
+        <header>
+            <h1>&#9889; Electricity Demand Forecasting</h1>
+            <p class="subtitle">Predict electricity consumption for the next 6 months</p>
+        </header>
+
+        <div class="input-panel">
+            <div class="input-group">
+                <label for="area">Area</label>
+                <select id="area">
+                    {% for a in areas %}
+                    <option value="{{ a }}">{{ a }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="input-group">
+                <label for="season">Season</label>
+                <select id="season">
+                    {% for s in seasons %}
+                    <option value="{{ s }}">{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="input-group">
+                <label for="temperature">Avg Temperature (&deg;C)</label>
+                <input type="number" id="temperature" value="30" min="0" max="55" step="0.5">
+            </div>
+            <div class="input-group">
+                <label for="population">Population</label>
+                <input type="number" id="population" value="50000" min="1000" step="1000">
+            </div>
+            <button id="predictBtn" onclick="predict()">Predict Demand</button>
+        </div>
+
+        <div id="results" class="results-section" style="display:none;">
+            <h2>6-Month Forecast</h2>
+            <div class="forecast-grid" id="forecastGrid"></div>
+        </div>
+    </div>
+
+    <script>
+        async function predict() {
+            const btn = document.getElementById('predictBtn');
+            btn.disabled = true;
+            btn.textContent = 'Predicting...';
+
+            const payload = {
+                area: document.getElementById('area').value,
+                season: document.getElementById('season').value,
+                temperature: document.getElementById('temperature').value,
+                population: document.getElementById('population').value
+            };
+
+            try {
+                const res = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                displayResults(data.forecasts);
+            } catch (err) {
+                alert('Prediction failed. Make sure the server is running.');
+                console.error(err);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Predict Demand';
+            }
+        }
+
+        function displayResults(forecasts) {
+            const section = document.getElementById('results');
+            const grid = document.getElementById('forecastGrid');
+            section.style.display = 'block';
+            grid.innerHTML = '';
+
+            const colors = ['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e'];
+
+            forecasts.forEach((val, i) => {
+                const card = document.createElement('div');
+                card.className = 'forecast-circle';
+                card.style.borderColor = colors[i];
+                card.style.animationDelay = (i * 0.1) + 's';
+
+                const formatted = val >= 1000000
+                    ? (val / 1000000).toFixed(2) + 'M'
+                    : val >= 1000
+                        ? (val / 1000).toFixed(1) + 'K'
+                        : val.toFixed(0);
+
+                card.innerHTML = `
+                    <span class="month-label">Month ${i + 1}</span>
+                    <span class="value">${formatted}</span>
+                    <span class="unit">kWh</span>
+                `;
+                grid.appendChild(card);
+            });
+
+            section.scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+
+</html>

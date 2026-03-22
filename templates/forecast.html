@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+{% block title %}Forecasting{% endblock %}
+{% block page_title %}Electricity Demand Forecasting{% endblock %}
+
+{% block content %}
+<!-- Circle / Division / Area cascading selectors -->
+<div class="controls-bar">
+    <div class="form-group">
+        <label for="fCircle">Circle</label>
+        <select id="fCircle" onchange="onCircleChange()">
+            <option value="">-- Select Circle --</option>
+            {% for c in circles %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="fDivision">Division</label>
+        <select id="fDivision" onchange="onDivisionChange()" disabled>
+            <option value="">-- Select Division --</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="fArea">Area</label>
+        <select id="fArea" onchange="onAreaChange()" disabled>
+            <option value="">-- Select Area --</option>
+        </select>
+    </div>
+    <div class="form-group" style="align-self:flex-end;">
+        <a href="{{ url_for('reports') }}" class="btn-primary"
+            style="text-decoration:none; display:inline-flex; align-items:center;">
+            <i class="fas fa-file-alt"></i> Report Generation
+        </a>
+    </div>
+</div>
+
+<!-- Area Details Panel -->
+<div id="areaDetailsPanel" class="area-details-panel" style="display:none;">
+    <div class="area-details-header">
+        <h3><i class="fas fa-map-marker-alt"></i> <span id="detailAreaName">--</span></h3>
+        <span class="area-path" id="detailPath"></span>
+    </div>
+    <div class="area-details-grid">
+        <div class="detail-item">
+            <span class="detail-label">Connections</span>
+            <span class="detail-value" id="detailConnections">--</span>
+        </div>
+        <div class="detail-item">
+            <span class="detail-label">Consumption</span>
+            <span class="detail-value" id="detailConsumption">-- <small>MU</small></span>
+        </div>
+        <div class="detail-item">
+            <span class="detail-label">Peak Demand</span>
+            <span class="detail-value" id="detailPeak">-- <small>MW</small></span>
+        </div>
+        <div class="detail-item">
+            <span class="detail-label">Load Demand</span>
+            <span class="detail-value" id="detailLoad">-- <small>MW</small></span>
+        </div>
+        <div class="detail-item">
+            <span class="detail-label">Growth Rate</span>
+            <span class="detail-value" id="detailGrowth">--%</span>
+        </div>
+    </div>
+</div>
+
+<!-- Trend Indicator -->
+<div id="trendBanner" class="trend-banner hidden">
+    <i class="fas fa-arrow-trend-up"></i>
+    <span id="trendText"></span>
+</div>
+
+<!-- Forecast Circle Cards (Jan–Jun 2026) -->
+<div class="circle-cards-row" id="forecastCircles" style="display:none;"></div>
+
+<!-- Combined Historical + Forecast Chart -->
+<div class="charts-row" id="forecastChartWrap" style="display:none;">
+    <div class="chart-card wide">
+        <h3 class="card-title"><i class="fas fa-chart-line"></i> Historical (Jun 2021 – Dec 2025) &amp; Forecast (Jan –
+            Jun 2026)</h3>
+        <canvas id="forecastChart"></canvas>
+    </div>
+</div>
+
+<!-- Scenario Section -->
+<div id="scenarioSection" class="chart-card wide" style="display:none; margin-top:24px;">
+    <h3 class="card-title"><i class="fas fa-sliders-h"></i> Scenario: Services Growth Forecast</h3>
+    <div class="controls-bar" style="padding:0; border:none; background:none; margin-bottom:16px; box-shadow:none;">
+        <div class="form-group">
+            <label for="fServicesIncrease">Additional Services</label>
+            <input type="number" id="fServicesIncrease" value="0" min="0" step="10" placeholder="e.g. 50">
+        </div>
+        <div class="form-group" style="align-self:flex-end;">
+            <button class="btn-primary" id="scenarioBtn" onclick="runScenario()">
+                <i class="fas fa-bolt"></i> Predict Scenario
+            </button>
+        </div>
+    </div>
+    <canvas id="scenarioChart"></canvas>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const hierarchyData = JSON.parse('{{ hierarchy | tojson | safe }}');
+    let fChart = null;
+    let sChart = null;
+    let baseFcData = null;
+
+    function onCircleChange() {
+        const circle = document.getElementById('fCircle').value;
+        const divSel = document.getElementById('fDivision');
+        const areaSel = document.getElementById('fArea');
+
+        divSel.innerHTML = '<option value="">-- Select Division --</option>';
+        areaSel.innerHTML = '<option value="">-- Select Area --</option>';
+        areaSel.disabled = true;
+        hideAll();
+
+        if (!circle) { divSel.disabled = true; return; }
+        const divisions = Object.keys(hierarchyData[circle] || {});
+        divisions.forEach(d => { divSel.innerHTML += `<option value="${d}">${d}</option>`; });
+        divSel.disabled = false;
+    }
+
+    function onDivisionChange() {
+        const circle = document.getElementById('fCircle').value;
+        const division = document.getElementById('fDivision').value;
+        const areaSel = document.getElementById('fArea');
+
+        areaSel.innerHTML = '<option value="">-- Select Area --</option>';
+        hideAll();
+
+        if (!division) { areaSel.disabled = true; return; }
+        const areas = hierarchyData[circle][division] || [];
+        areas.forEach(a => { areaSel.innerHTML += `<option value="${a}">${a}</option>`; });
+        areaSel.disabled = false;
+    }
+
+    function onAreaChange() {
+        const area = document.getElementById('fArea').value;
+        if (area) {
+            loadAreaDetails(area);
+            loadForecast(area, 0, true);
+        } else {
+            hideAll();
+        }
+    }
+
+    function hideAll() {
+        document.getElementById('areaDetailsPanel').style.display = 'none';
+        document.getElementById('trendBanner').classList.add('hidden');
+        document.getElementById('forecastCircles').style.display = 'none';
+        document.getElementById('forecastChartWrap').style.display = 'none';
+        document.getElementById('scenarioSection').style.display = 'none';
+    }
+
+    async function loadAreaDetails(areaName) {
+        try {
+            const res = await fetch('/api/area-details/' + encodeURIComponent(areaName));
+            const s = await res.json();
+            document.getElementById('detailAreaName').textContent = s.area;
+            document.getElementById('detailPath').textContent =
+                (s.circle || '') + ' Circle  ›  ' + (s.division || '') + ' Division  ›  ' + s.area;
+            document.getElementById('detailConnections').textContent = s.connections.toLocaleString();
+            document.getElementById('detailConsumption').innerHTML = s.consumption.toLocaleString() + ' <small>MU</small>';
+            document.getElementById('detailPeak').innerHTML = s.peak_demand.toLocaleString() + ' <small>MW</small>';
+            document.getElementById('detailLoad').innerHTML = s.load_demand.toLocaleString() + ' <small>MW</small>';
+            document.getElementById('detailGrowth').textContent = s.growth + '%';
+            document.getElementById('areaDetailsPanel').style.display = 'block';
+        } catch (e) { console.error(e); }
+    }
+
+    async function loadForecast(area, servicesIncrease, isBase) {
+        try {
+            const res = await fetch('/api/forecast-area', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ area, services_increase: servicesIncrease })
+            });
+            const data = await res.json();
+            if (isBase) {
+                baseFcData = data;
+                renderBaseForecast(data);
+            } else {
+                renderScenarioChart(data);
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    function renderBaseForecast(data) {
+        // Trend banner
+        const banner = document.getElementById('trendBanner');
+        const trendText = document.getElementById('trendText');
+        banner.classList.remove('hidden', 'trend-up', 'trend-down', 'trend-stable');
+        if (data.trend === 'Increasing') {
+            banner.classList.add('trend-up');
+            trendText.textContent = `Demand is INCREASING (${data.change_pct}% change over Jan–Jun 2026)`;
+        } else if (data.trend === 'Decreasing') {
+            banner.classList.add('trend-down');
+            trendText.textContent = `Demand is DECREASING (${data.change_pct}% change over Jan–Jun 2026)`;
+        } else {
+            banner.classList.add('trend-stable');
+            trendText.textContent = `Demand is STABLE (${data.change_pct}% change over Jan–Jun 2026)`;
+        }
+
+        // Circle cards for Jan–Jun 2026
+        const circlesDiv = document.getElementById('forecastCircles');
+        circlesDiv.style.display = 'flex';
+        circlesDiv.innerHTML = '';
+        const ringColors = ['blue', 'green', 'orange', 'red', 'purple', 'teal'];
+        data.fc_units.forEach((val, i) => {
+            const formatted = val >= 1000000 ? (val / 1000000).toFixed(2) + 'M'
+                : val >= 1000 ? (val / 1000).toFixed(1) + 'K' : val.toFixed(0);
+            circlesDiv.innerHTML += `
+            <div class="circle-card animate-in" style="animation-delay:${i * 0.08}s">
+                <div class="circle-ring ${ringColors[i]}">
+                    <div class="circle-inner">
+                        <span class="circle-value">${formatted}</span>
+                        <span class="circle-unit">Units</span>
+                    </div>
+                </div>
+                <p class="circle-label">${data.fc_labels[i]}</p>
+            </div>`;
+        });
+
+        // Combined historical + forecast chart
+        document.getElementById('forecastChartWrap').style.display = 'flex';
+        const ctx = document.getElementById('forecastChart');
+        if (fChart) fChart.destroy();
+
+        const n = data.hist_labels.length;
+        const allLabels = [...data.hist_labels, ...data.fc_labels];
+        const histData = [...data.hist_units, ...new Array(data.fc_labels.length).fill(null)];
+        // Bridge last historical point into forecast line so they visually connect
+        const fcData = [...new Array(n - 1).fill(null), data.hist_units[n - 1], ...data.fc_units];
+
+        fChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: allLabels,
+                datasets: [
+                    {
+                        label: 'Historical (Jun 2021–Dec 2025)',
+                        data: histData,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59,130,246,0.07)',
+                        fill: true, tension: 0.3, pointRadius: 1.5,
+                        pointBackgroundColor: '#3b82f6', borderWidth: 2
+                    },
+                    {
+                        label: 'Forecast (Jan–Jun 2026)',
+                        data: fcData,
+                        borderColor: '#e87a1e',
+                        backgroundColor: 'rgba(232,122,30,0.12)',
+                        fill: true, tension: 0.4, pointRadius: 5,
+                        pointBackgroundColor: '#e87a1e', borderWidth: 2.5,
+                        borderDash: [6, 3]
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#6b7280' } } },
+                scales: {
+                    x: {
+                        ticks: { color: '#6b7280', maxRotation: 45, autoSkip: true, maxTicksLimit: 24 },
+                        grid: { color: 'rgba(0,0,0,0.06)' }
+                    },
+                    y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } }
+                }
+            }
+        });
+
+        // Show scenario section
+        document.getElementById('scenarioSection').style.display = 'block';
+    }
+
+    async function runScenario() {
+        const area = document.getElementById('fArea').value;
+        const inc = parseInt(document.getElementById('fServicesIncrease').value) || 0;
+        const btn = document.getElementById('scenarioBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Predicting...';
+        await loadForecast(area, inc, false);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-bolt"></i> Predict Scenario';
+    }
+
+    function renderScenarioChart(data) {
+        const ctx = document.getElementById('scenarioChart');
+        if (sChart) sChart.destroy();
+        sChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.fc_labels,
+                datasets: [
+                    {
+                        label: 'Base Forecast (Jan–Jun 2026)',
+                        data: baseFcData ? baseFcData.fc_units : [],
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59,130,246,0.07)',
+                        fill: true, tension: 0.4, pointRadius: 5,
+                        pointBackgroundColor: '#3b82f6', borderWidth: 2
+                    },
+                    {
+                        label: 'Scenario Forecast',
+                        data: data.fc_units,
+                        borderColor: '#e87a1e',
+                        backgroundColor: 'rgba(232,122,30,0.10)',
+                        fill: true, tension: 0.4, pointRadius: 5,
+                        pointBackgroundColor: '#e87a1e', borderWidth: 2.5
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#6b7280' } } },
+                scales: {
+                    x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+                    y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

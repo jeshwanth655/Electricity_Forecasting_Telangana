@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Chief Electrical Engineer Dashboard{% endblock %}
+
+{% block content %}
+<!-- Summary Circle Cards -->
+<div class="circle-cards-row summary-left-row">
+    <div class="circle-card">
+        <div class="circle-ring green">
+            <div class="circle-inner">
+                <span class="circle-value">{{ '{:,}'.format(summary.total_connections) }}</span>
+            </div>
+        </div>
+        <p class="circle-label">Total Connections</p>
+    </div>
+    <div class="circle-card">
+        <div class="circle-ring orange">
+            <div class="circle-inner">
+                <span class="circle-value">{{ summary.avg_growth }}%</span>
+            </div>
+        </div>
+        <p class="circle-label">Avg Growth Rate</p>
+    </div>
+</div>
+
+<!-- Small Circle Buttons -->
+<div class="table-card compact-card">
+    <h3 class="card-title"><i class="fas fa-circle"></i> Dashboard Quick Circles</h3>
+    <div class="mini-circle-row">
+        {% for circle in circles[:10] %}
+        <button type="button" class="mini-circle-btn" data-circle="{{ circle }}" title="{{ circle }}">{{ circle
+            }}</button>
+        {% endfor %}
+    </div>
+    <div class="quick-circle-areas">
+        <h4 id="quickCircleTitle" class="card-title">Divisions</h4>
+        <div id="quickCircleDivisions" class="area-chip-list"></div>
+        <div id="quickCircleAreas" class="area-chip-list" style="margin-top:10px;"></div>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="charts-row">
+    <div class="chart-card wide">
+        <h3 class="card-title"><i class="fas fa-chart-line"></i> Monthly Consumption Trend (2021-2025)</h3>
+        <canvas id="monthlyChart"></canvas>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const circles = JSON.parse('{{ circles | tojson | safe }}');
+        const circleAreaMap = JSON.parse('{{ circle_area_map | tojson | safe }}');
+        const hierarchyMap = JSON.parse('{{ hierarchy_map | tojson | safe }}');
+        const quickCircleTitle = document.getElementById('quickCircleTitle');
+        const quickCircleDivisions = document.getElementById('quickCircleDivisions');
+        const quickCircleAreas = document.getElementById('quickCircleAreas');
+
+        function setActiveDivision(circleName, divisionName) {
+            quickCircleDivisions.querySelectorAll('.division-pill').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.division === divisionName);
+            });
+
+            const areas = (hierarchyMap[circleName]?.[divisionName] || []).slice().sort((a, b) => a.localeCompare(b));
+            quickCircleAreas.innerHTML = areas.length
+                ? areas.map(a => `<span class="area-chip">${a}</span>`).join('')
+                : '<span class="area-chip empty">No areas found</span>';
+        }
+
+        function setActiveQuickCircle(circleName) {
+            document.querySelectorAll('.mini-circle-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.circle === circleName);
+            });
+
+            const areasForCircle = circleAreaMap[circleName] || [];
+            quickCircleTitle.textContent = `${circleName} Divisions & Areas (${areasForCircle.length})`;
+
+            const divisionMap = hierarchyMap[circleName] || {};
+            const divisionNames = Object.keys(divisionMap).sort((a, b) => a.localeCompare(b));
+
+            if (divisionNames.length === 0) {
+                quickCircleDivisions.innerHTML = '<span class="area-chip empty">No divisions found</span>';
+                quickCircleAreas.innerHTML = '';
+                return;
+            }
+
+            quickCircleDivisions.innerHTML = divisionNames
+                .map(division => `<button type="button" class="division-pill" data-division="${division}">${division}</button>`)
+                .join('');
+
+            quickCircleAreas.innerHTML = '<span class="area-chip empty">Select a division to view areas</span>';
+
+            quickCircleDivisions.querySelectorAll('.division-pill').forEach(btn => {
+                btn.addEventListener('click', () => setActiveDivision(circleName, btn.dataset.division));
+            });
+        }
+
+        document.querySelectorAll('.mini-circle-btn').forEach(btn => {
+            btn.addEventListener('click', () => setActiveQuickCircle(btn.dataset.circle));
+        });
+
+        if (circles.length > 0) {
+            setActiveQuickCircle(circles[0]);
+        }
+
+        // Monthly Trend Chart
+        fetch('/api/monthly-trend')
+            .then(r => r.json())
+            .then(data => {
+                new Chart(document.getElementById('monthlyChart'), {
+                    type: 'line',
+                    data: {
+                        labels: data.months,
+                        datasets: [{
+                            label: 'Consumption (MU)',
+                            data: data.values,
+                            borderColor: '#e87a1e',
+                            backgroundColor: 'rgba(232,122,30,0.12)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 5,
+                            pointBackgroundColor: '#e87a1e'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { labels: { color: '#6b7280' } } },
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'Month-Year (2021-2025)', color: '#6b7280' },
+                                ticks: { color: '#6b7280' },
+                                grid: { color: 'rgba(0,0,0,0.06)' }
+                            },
+                            y: {
+                                title: { display: true, text: 'Consumption (MU)', color: '#6b7280' },
+                                ticks: { color: '#6b7280' },
+                                grid: { color: 'rgba(0,0,0,0.06)' }
+                            }
+                        }
+                    }
+                });
+            });
+    });
+</script>
+{% endblock %}

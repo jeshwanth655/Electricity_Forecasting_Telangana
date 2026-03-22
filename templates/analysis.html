@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+{% block title %}Area Analysis{% endblock %}
+{% block page_title %}Area Analysis{% endblock %}
+
+{% block content %}
+<div class="controls-bar">
+    <div class="form-group">
+        <label for="circleSelect">Circle</label>
+        <select id="circleSelect" onchange="onCircleChange()">
+            <option value="">-- Select Circle --</option>
+            {% for c in circles %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="divisionSelect">Division</label>
+        <select id="divisionSelect" onchange="onDivisionChange()" disabled>
+            <option value="">-- Select Division --</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="areaSelect">Area</label>
+        <select id="areaSelect" onchange="loadAreaStats()" disabled>
+            <option value="">-- Select Area --</option>
+        </select>
+    </div>
+</div>
+
+<!-- Area Path Banner -->
+<div id="areaPathBanner" class="area-details-panel" style="display:none;">
+    <div class="area-details-header">
+        <h3><i class="fas fa-map-marker-alt"></i> <span id="analysisAreaName">--</span></h3>
+        <span class="area-path" id="analysisPath"></span>
+    </div>
+</div>
+
+<!-- Stats Cards (clickable tabs) -->
+<div class="circle-cards-row" id="areaCircles">
+    <div class="circle-card tab-card active" onclick="switchTab('consumption')" id="tabConsumption">
+        <div class="circle-ring blue">
+            <div class="circle-inner"><span class="circle-value" id="statConsumption">--</span><span
+                    class="circle-unit">kWh</span></div>
+        </div>
+        <p class="circle-label">Last Month Consumption</p>
+    </div>
+    <div class="circle-card tab-card" onclick="switchTab('connections')" id="tabConnections">
+        <div class="circle-ring green">
+            <div class="circle-inner"><span class="circle-value" id="statConnections">--</span><span class="circle-unit"
+                    id="statGrowth" style="font-weight:700;"></span></div>
+        </div>
+        <p class="circle-label">Active Connections</p>
+    </div>
+    <div class="circle-card tab-card" onclick="switchTab('load')" id="tabLoad">
+        <div class="circle-ring orange">
+            <div class="circle-inner"><span class="circle-value" id="statLoad">--</span><span
+                    class="circle-unit">kW</span></div>
+        </div>
+        <p class="circle-label">Last Month Load</p>
+    </div>
+    <div class="circle-card tab-card" onclick="switchTab('growth')" id="tabGrowth">
+        <div class="circle-ring red">
+            <div class="circle-inner"><i class="fas fa-cloud-sun" id="weatherIcon"
+                    style="font-size:1.6rem;color:#f59e0b;"></i><span class="circle-value" id="statWeatherTemp"
+                    style="font-size:1rem;">--</span></div>
+        </div>
+        <p class="circle-label">Weather</p>
+    </div>
+</div>
+
+<!-- Charts section (hidden until area selected) -->
+<div id="chartsSection" style="display:none;">
+
+    <!-- TAB 1: Consumption Charts -->
+    <div class="tab-panel" id="panelConsumption">
+        <div class="charts-row">
+            <div class="chart-card wide">
+                <h3 class="card-title"><i class="fas fa-chart-line"></i> Consumption Timeline (Jun 2021 – Dec 2025)</h3>
+                <canvas id="consumptionTimelineChart"></canvas>
+            </div>
+        </div>
+        <div class="charts-row">
+            <div class="chart-card wide">
+                <h3 class="card-title"><i class="fas fa-chart-bar"></i> Last 6 Months Consumption</h3>
+                <canvas id="last6MonthsChart"></canvas>
+            </div>
+        </div>
+        <div class="charts-row">
+            <div class="chart-card wide">
+                <h3 class="card-title"><i class="fas fa-table"></i> Monthly Consumption Details</h3>
+                <div class="table-wrapper">
+                    <table class="data-table" id="consumptionTable">
+                        <thead>
+                            <tr>
+                                <th>Month</th>
+                                <th>Services</th>
+                                <th>Units</th>
+                                <th>Load (MW)</th>
+                                <th>Season</th>
+                                <th>Min Temp (°C)</th>
+                                <th>Max Temp (°C)</th>
+                                <th>Rain (mm)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="consumptionTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 2: Connections Charts -->
+    <div class="tab-panel" id="panelConnections" style="display:none;">
+        <div class="charts-row">
+            <div class="chart-card wide">
+                <h3 class="card-title"><i class="fas fa-users"></i> Services / Connections Growth (Yearly)</h3>
+                <canvas id="servicesChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3: Load Demand Charts -->
+    <div class="tab-panel" id="panelLoad" style="display:none;">
+        <div class="charts-row">
+            <div class="chart-card wide">
+                <h3 class="card-title"><i class="fas fa-bolt"></i> Peak Demand vs Load Demand (Yearly)</h3>
+                <canvas id="peakLoadChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 4: Weather – Temperature & Rainfall -->
+    <div class="tab-panel" id="panelGrowth" style="display:none;">
+        <div class="charts-row">
+            <div class="chart-card">
+                <h3 class="card-title"><i class="fas fa-temperature-high"></i> Temperature vs Consumption</h3>
+                <canvas id="tempConsChart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3 class="card-title"><i class="fas fa-cloud-rain"></i> Rainfall Trend</h3>
+                <canvas id="rainfallChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const hierarchyData = {{ hierarchy | tojson }};
+    let charts = {};
+    let cachedStats = null;
+    let cachedTrends = null;
+    let cachedMonthly = null;
+    let currentTab = 'consumption';
+
+    function destroyAllCharts() {
+        Object.values(charts).forEach(c => { if (c) c.destroy(); });
+        charts = {};
+    }
+
+    const chartTheme = {
+        plugins: { legend: { labels: { color: '#6b7280' } } },
+        scales: {
+            x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+            y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } }
+        }
+    };
+
+    function formatNum(n) {
+        if (n >= 100000) return (n / 100000).toFixed(1) + 'L';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+        return n.toLocaleString();
+    }
+
+    function switchTab(tab) {
+        currentTab = tab;
+        // Update active tab card
+        document.querySelectorAll('.tab-card').forEach(el => el.classList.remove('active'));
+        const tabMap = { consumption: 'tabConsumption', connections: 'tabConnections', load: 'tabLoad', growth: 'tabGrowth' };
+        document.getElementById(tabMap[tab]).classList.add('active');
+
+        // Show/hide panels
+        document.querySelectorAll('.tab-panel').forEach(el => el.style.display = 'none');
+        const panelMap = { consumption: 'panelConsumption', connections: 'panelConnections', load: 'panelLoad', growth: 'panelGrowth' };
+        document.getElementById(panelMap[tab]).style.display = 'block';
+
+        // Render charts for this tab if data is loaded
+        if (cachedStats && cachedTrends) {
+            destroyAllCharts();
+            renderTabCharts(tab, cachedStats, cachedTrends, cachedMonthly);
+        }
+    }
+
+    function renderTabCharts(tab, s, trends, monthly) {
+        if (tab === 'consumption' && monthly) {
+            // 1. Full timeline chart (Jun 2021 – Dec 2025)
+            charts.timeline = new Chart(document.getElementById('consumptionTimelineChart'), {
+                type: 'line',
+                data: {
+                    labels: monthly.timeline_labels,
+                    datasets: [{
+                        label: 'Units (₹)', data: monthly.timeline_units,
+                        borderColor: '#e87a1e', backgroundColor: 'rgba(232,122,30,0.08)',
+                        fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#e87a1e',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { labels: { color: '#6b7280' } } },
+                    scales: {
+                        x: {
+                            ticks: { color: '#6b7280', maxRotation: 45, autoSkip: true, maxTicksLimit: 20 },
+                            grid: { color: 'rgba(0,0,0,0.06)' }
+                        },
+                        y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } }
+                    }
+                }
+            });
+
+            // 2. Last 6 months bar chart
+            charts.last6 = new Chart(document.getElementById('last6MonthsChart'), {
+                type: 'bar',
+                data: {
+                    labels: monthly.last6_labels,
+                    datasets: [{
+                        label: 'Units', data: monthly.last6_units,
+                        backgroundColor: ['#e87a1e', '#f59e0b', '#d97706', '#e87a1e', '#f59e0b', '#d97706'],
+                        borderRadius: 8, barThickness: 36
+                    }]
+                },
+                options: { responsive: true, ...chartTheme }
+            });
+
+            // 3. Populate data table
+            const tbody = document.getElementById('consumptionTableBody');
+            tbody.innerHTML = '';
+            monthly.rows.forEach(r => {
+                tbody.innerHTML += `<tr>
+                    <td>${r.month}</td>
+                    <td>${r.services.toLocaleString()}</td>
+                    <td>${r.units.toLocaleString()}</td>
+                    <td>${r.load}</td>
+                    <td><span class="season-badge ${r.season.toLowerCase()}">${r.season}</span></td>
+                    <td>${r.mintemp}</td>
+                    <td>${r.maxtemp}</td>
+                    <td>${r.rain}</td>
+                </tr>`;
+            });
+
+        } else if (tab === 'connections') {
+            // Services / Connections Growth
+            charts.services = new Chart(document.getElementById('servicesChart'), {
+                type: 'line',
+                data: {
+                    labels: trends.years,
+                    datasets: [{
+                        label: 'Connections', data: trends.services_yearly,
+                        borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.12)',
+                        fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#34d399'
+                    }]
+                },
+                options: { responsive: true, ...chartTheme }
+            });
+
+        } else if (tab === 'load') {
+            // Peak Demand vs Load Demand
+            charts.peakLoad = new Chart(document.getElementById('peakLoadChart'), {
+                type: 'line',
+                data: {
+                    labels: trends.years,
+                    datasets: [
+                        {
+                            label: 'Peak Demand (MW)', data: trends.peak_demand_yearly,
+                            borderColor: '#e87a1e', backgroundColor: 'rgba(232,122,30,0.08)',
+                            fill: true, tension: 0.4, pointRadius: 5, pointBackgroundColor: '#e87a1e'
+                        },
+                        {
+                            label: 'Load Demand (MW)', data: trends.load_demand_yearly,
+                            borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)',
+                            fill: true, tension: 0.4, pointRadius: 5, pointBackgroundColor: '#f59e0b'
+                        }
+                    ]
+                },
+                options: { responsive: true, ...chartTheme }
+            });
+
+        } else if (tab === 'growth') {
+            // Temperature vs Consumption
+            charts.tempCons = new Chart(document.getElementById('tempConsChart'), {
+                type: 'line',
+                data: {
+                    labels: trends.years,
+                    datasets: [
+                        {
+                            label: 'Avg Temp (°C)', data: trends.temp_yearly,
+                            borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.08)',
+                            fill: true, tension: 0.4, pointRadius: 5, pointBackgroundColor: '#ef4444',
+                            yAxisID: 'y'
+                        },
+                        {
+                            label: 'Consumption (MU)', data: trends.consumption_yearly,
+                            borderColor: '#e87a1e', backgroundColor: 'rgba(232,122,30,0.08)',
+                            fill: true, tension: 0.4, pointRadius: 5, pointBackgroundColor: '#e87a1e',
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { labels: { color: '#6b7280' } } },
+                    scales: {
+                        x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+                        y: { position: 'left', ticks: { color: '#ef4444' }, title: { display: true, text: '°C', color: '#ef4444' } },
+                        y1: { position: 'right', ticks: { color: '#e87a1e' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'MU', color: '#e87a1e' } }
+                    }
+                }
+            });
+
+            // Rainfall Trend (monthly for latest year)
+            charts.rainfall = new Chart(document.getElementById('rainfallChart'), {
+                type: 'bar',
+                data: {
+                    labels: trends.months,
+                    datasets: [{
+                        label: 'Rainfall (mm)', data: trends.rain_monthly || [],
+                        backgroundColor: '#3b82f6', borderRadius: 6, barThickness: 24
+                    }]
+                },
+                options: { responsive: true, ...chartTheme }
+            });
+
+        }
+    }
+
+    function onCircleChange() {
+        const circle = document.getElementById('circleSelect').value;
+        const divSel = document.getElementById('divisionSelect');
+        const areaSel = document.getElementById('areaSelect');
+
+        divSel.innerHTML = '<option value="">-- Select Division --</option>';
+        areaSel.innerHTML = '<option value="">-- Select Area --</option>';
+        areaSel.disabled = true;
+        document.getElementById('areaPathBanner').style.display = 'none';
+        document.getElementById('chartsSection').style.display = 'none';
+
+        if (!circle) { divSel.disabled = true; return; }
+
+        const divisions = Object.keys(hierarchyData[circle] || {});
+        divisions.forEach(d => {
+            divSel.innerHTML += `<option value="${d}">${d}</option>`;
+        });
+        divSel.disabled = false;
+    }
+
+    function onDivisionChange() {
+        const circle = document.getElementById('circleSelect').value;
+        const division = document.getElementById('divisionSelect').value;
+        const areaSel = document.getElementById('areaSelect');
+
+        areaSel.innerHTML = '<option value="">-- Select Area --</option>';
+        document.getElementById('areaPathBanner').style.display = 'none';
+        document.getElementById('chartsSection').style.display = 'none';
+
+        if (!division) { areaSel.disabled = true; return; }
+
+        const areas = hierarchyData[circle][division] || [];
+        areas.forEach(a => {
+            areaSel.innerHTML += `<option value="${a}">${a}</option>`;
+        });
+        areaSel.disabled = false;
+    }
+
+    function loadAreaStats() {
+        const area = document.getElementById('areaSelect').value;
+        if (!area) {
+            document.getElementById('areaPathBanner').style.display = 'none';
+            document.getElementById('chartsSection').style.display = 'none';
+            return;
+        }
+
+        const circle = document.getElementById('circleSelect').value;
+        const division = document.getElementById('divisionSelect').value;
+
+        Promise.all([
+            fetch('/api/area-stats?area=' + encodeURIComponent(area)).then(r => r.json()),
+            fetch('/api/area-trends/' + encodeURIComponent(area)).then(r => r.json()),
+            fetch('/api/area-monthly-data/' + encodeURIComponent(area)).then(r => r.json())
+        ]).then(([s, trends, monthly]) => {
+            cachedStats = s;
+            cachedTrends = trends;
+            cachedMonthly = monthly;
+
+            // Path banner
+            document.getElementById('analysisAreaName').textContent = s.area;
+            document.getElementById('analysisPath').textContent =
+                circle + ' Circle  ›  ' + division + '  ›  ' + s.area;
+            document.getElementById('areaPathBanner').style.display = 'block';
+
+            // Stats cards — last month values from monthly data
+            const lastRow = monthly.rows.length ? monthly.rows[monthly.rows.length - 1] : null;
+            if (lastRow) {
+                document.getElementById('statConsumption').textContent = lastRow.units.toLocaleString();
+                document.getElementById('statLoad').textContent = lastRow.load;
+                // Weather icon & temp
+                const avgTemp = ((lastRow.mintemp + lastRow.maxtemp) / 2).toFixed(1);
+                document.getElementById('statWeatherTemp').textContent = avgTemp + '°C';
+                const icon = document.getElementById('weatherIcon');
+                if (lastRow.rain > 50) { icon.className = 'fas fa-cloud-showers-heavy'; icon.style.color = '#3b82f6'; }
+                else if (lastRow.rain > 10) { icon.className = 'fas fa-cloud-rain'; icon.style.color = '#60a5fa'; }
+                else if (avgTemp > 35) { icon.className = 'fas fa-sun'; icon.style.color = '#f59e0b'; }
+                else { icon.className = 'fas fa-cloud-sun'; icon.style.color = '#f59e0b'; }
+            } else {
+                document.getElementById('statConsumption').textContent = s.consumption.toLocaleString();
+                document.getElementById('statLoad').textContent = s.load_demand.toLocaleString();
+            }
+            document.getElementById('statConnections').textContent = formatNum(s.connections);
+            const growthEl = document.getElementById('statGrowth');
+            const gVal = s.growth;
+            growthEl.textContent = (gVal >= 0 ? '▲' : '▼') + ' ' + Math.abs(gVal) + '%';
+            growthEl.style.color = gVal >= 0 ? '#22c55e' : '#ef4444';
+
+            // Show charts and render default tab
+            document.getElementById('chartsSection').style.display = 'block';
+            destroyAllCharts();
+            switchTab(currentTab);
+        });
+    }
+</script>
+{% endblock %}
